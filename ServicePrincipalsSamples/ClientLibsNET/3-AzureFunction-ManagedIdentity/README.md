@@ -27,7 +27,7 @@ git clone https://github.com/microsoft/azure-devops-auth-samples.git
 
 Once the Managed Identity is created, [add it to your Azure DevOps organization](https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/service-principal-managed-identity#step-by-step-configuration).
 
-### Step 2: Configure the sample
+### Step 4: Configure the sample
 
 Update constants in the file `TestMIHttpTrigger.cs` with the information about your Azure AD Managed Identity and Azure DevOps organization.
 
@@ -52,7 +52,9 @@ In Visual Studio:
 1. Open the solution file `../ServicePrincipalsSamples.sln`.
 2. Configure the Azure account to be used in `Tools -> Options -> Azure Service Authentication -> Account Selection`.
 3. Build the project and run using the profile `AzureFunctionTest`.
-4. In the output you will get the function URL that you can call with the query parameter `?workItemId={put here some work item id}`.
+4. In the output you will get the function URL and a function key. Call the function with the work item ID and key, for example `?workItemId={work item id}&code={function key}`. You can alternatively send the key in the `x-functions-key` header.
+
+The function uses `AuthorizationLevel.Function`; do not change it to `Anonymous`. A function key authenticates the caller to the sample endpoint. Grant the managed identity only the minimum Azure DevOps permissions required to read the intended work items.
 
 See [Azure Identity client library for .NET](https://learn.microsoft.com/en-us/dotnet/api/overview/azure/identity-readme?view=azure-dotnet#defaultazurecredential) for more details and options for providing local development credentials.
 
