@@ -49,7 +49,7 @@ namespace Company.Function
 
         [FunctionName("TestMIHttpTrigger")]
         public static async Task<IActionResult> Run(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req,
+            [HttpTrigger(AuthorizationLevel.Function, "get", Route = null)] HttpRequest req,
             ILogger log)
         {
             if (!int.TryParse(req.Query["workItemId"], out int workItemId))
@@ -57,12 +57,10 @@ namespace Company.Function
                 return new BadRequestObjectResult($"Invalid Work item ID: {req.Query["workItemId"]}.");
             }
 
-            var vssConnection = CreateVssConnection();
-
-            var workItemTrackingHttpClient = vssConnection.GetClient<WorkItemTrackingHttpClient>();
-            
             try
             {
+                var vssConnection = CreateVssConnection();
+                var workItemTrackingHttpClient = vssConnection.GetClient<WorkItemTrackingHttpClient>();
                 var workItem = await workItemTrackingHttpClient.GetWorkItemAsync(workItemId);
 
                 workItem.Fields.TryGetValue("System.Title", out var title);
@@ -71,7 +69,8 @@ namespace Company.Function
             }
             catch (Exception ex)
             {
-                return new ObjectResult(ex.Message);
+                log.LogError(ex, "Failed to retrieve work item {WorkItemId}.", workItemId);
+                return new StatusCodeResult(StatusCodes.Status500InternalServerError);
             }
         }
 
