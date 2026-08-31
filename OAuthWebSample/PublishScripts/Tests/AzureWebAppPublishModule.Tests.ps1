@@ -9,29 +9,41 @@ Describe 'Publish-WebPackage process invocation' {
             Mock Get-Item {
                 [pscustomobject]@{ FullName = 'C:\packages\sample app.zip' }
             }
+
             Mock Start-Process {
                 [pscustomobject]@{ ExitCode = 0 }
             }
         }
 
-        It 'launches msdeploy directly and preserves metacharacters as argument data' {
-            $password = 'secret&whoami|echo "quoted"'
+        It 'requires a trusted Microsoft-signed msdeploy executable' {
+            $moduleSource = Get-Content (Join-Path $PSScriptRoot '..\AzureWebAppPublishModule.psm1') -Raw
+
+            $moduleSource | Should -Match 'Get-AuthenticodeSignature'
+            $moduleSource | Should -Match 'SignatureStatus\]::Valid'
+            $moduleSource | Should -Match 'O=Microsoft Corporation'
+            $moduleSource | Should -Match "GetFolderPath\('ProgramFiles'\)"
+        }
+
+        It 'launches msdeploy directly and preserves allowed punctuation as argument data' {
+            $password = 'secret!value'
             $connections = @{
-                'Default&Name' = 'Server=db;Password=p@ss&whoami|echo injected>file'
+                'DefaultConnection' = 'Server=db;Database=sample'
             }
 
             $result = Publish-WebPackage `
                 -WebDeployPackage 'C:\packages\sample app.zip' `
                 -PublishUrl 'https://server.example:8172/msdeploy.axd' `
-                -SiteName 'site&whoami' `
-                -UserName 'deploy|user' `
+                -SiteName 'sample-site' `
+                -UserName 'deploy-user' `
                 -Password $password `
                 -ConnectionString $connections
 
             $result | Should -BeTrue
             Assert-MockCalled Start-Process -Times 1 -Exactly -ParameterFilter {
                 $FilePath -eq 'C:\Program Files\IIS\Microsoft Web Deploy V3\MsDeploy.exe' -and
-                $FilePath -ne 'cmd.exe'
+                $FilePath -ne 'cmd.exe' -and
+                $ArgumentList -match '-Source:Package=' -and
+                $ArgumentList -match '-dest:auto,computername='
             }
             Assert-MockCalled Start-Process -Times 1 -Exactly
         }
@@ -76,6 +88,48 @@ Describe 'Publish-WebPackage process invocation' {
                 -ConnectionString @{}
 
             $result | Should -BeFalse
+        }
+
+        It 'rejects deployment values containing command injection characters' {
+            {
+                Publish-WebPackage `
+                    -WebDeployPackage 'C:\packages\sample app.zip' `
+                    -PublishUrl 'https://server.example:8172/msdeploy.axd' `
+                    -SiteName 'site&whoami' `
+                    -UserName 'sample-user' `
+                    -Password 'sample-password' `
+                    -ConnectionString @{}
+            } | Should -Throw
+
+            Assert-MockCalled Start-Process -Times 0 -Exactly
+        }
+
+        It 'rejects invalid connection string parameter names' {
+            {
+                Publish-WebPackage `
+                    -WebDeployPackage 'C:\packages\sample app.zip' `
+                    -PublishUrl 'https://server.example:8172/msdeploy.axd' `
+                    -SiteName 'sample-site' `
+                    -UserName 'sample-user' `
+                    -Password 'sample-password' `
+                    -ConnectionString @{ 'Default&Name' = 'Server=db' }
+            } | Should -Throw
+
+            Assert-MockCalled Start-Process -Times 0 -Exactly
+        }
+
+        It 'rejects msdeploy grammar injection in scalar values' {
+            {
+                Publish-WebPackage `
+                    -WebDeployPackage 'C:\packages\sample app.zip' `
+                    -PublishUrl 'https://server.example:8172/msdeploy.axd' `
+                    -SiteName 'sample,userName=attacker' `
+                    -UserName 'sample-user' `
+                    -Password 'sample-password' `
+                    -ConnectionString @{}
+            } | Should -Throw
+
+            Assert-MockCalled Start-Process -Times 0 -Exactly
         }
     }
 }

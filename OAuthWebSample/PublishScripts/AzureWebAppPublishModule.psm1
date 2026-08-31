@@ -1405,7 +1405,27 @@ function Get-MSDeployCmd
 
                 if (Test-Path $installPath -PathType Leaf)
                 {
-                    $msdeployPath = $installPath
+                    $resolvedPath = (Resolve-Path $installPath).Path
+                    $approvedRoots = @(
+                        [Environment]::GetFolderPath('ProgramFiles')
+                        [Environment]::GetFolderPath('ProgramFilesX86')
+                    ) | Where-Object { $_ }
+
+                    $isApprovedPath = $approvedRoots | Where-Object {
+                        $resolvedPath.StartsWith(
+                            $_ + [IO.Path]::DirectorySeparatorChar,
+                            [StringComparison]::OrdinalIgnoreCase)
+                    }
+                    $signature = Get-AuthenticodeSignature $resolvedPath
+
+                    if (!$isApprovedPath -or
+                        $signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+                        $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation')
+                    {
+                        throw 'Get-MSDeployCmd: MsDeploy.exe is outside an approved installation path or is not signed by Microsoft.'
+                    }
+
+                    $msdeployPath = $resolvedPath
                     break
                 }
             }
@@ -1553,6 +1573,8 @@ Deploys a web package to Windows Azure.
 .DESCRIPTION
 The Publish-WebPackage function uses MsDeploy.exe and a web deployment package ZIP file to deploy resources to a Windows Azure web site. This function does not generate any output. If the call to MSDeploy.exe fails, the function throws an exception. To get more detailed output, use the Verbose common parameter.
 
+Run this deployment script from a dedicated, non-administrator build agent with access limited to the target application. Isolate the agent from unrelated workloads and forward deployment start, rejection, and exit-code logs to your monitoring system.
+
 .PARAMETER  WebDeployPackage
 Specifies the path and file name of a web deployment package ZIP file that Visual Studio generates. This parameter is required. To create a web deployment package ZIP file, see "How to: Create a Web Deployment Package in Visual Studio" at: http://go.microsoft.com/fwlink/?LinkId=391353.
 
@@ -1633,6 +1655,32 @@ function Publish-WebPackage
     )
 
     Write-VerboseWithTime 'Publish-WebPackage: Start'
+
+    $argumentValues = @{
+        SiteName = @{ Value = $SiteName; Pattern = '^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$' }
+        UserName = @{ Value = $UserName; Pattern = '^[A-Za-z0-9][A-Za-z0-9._@\\-]{0,255}$' }
+        Password = @{ Value = $Password; Pattern = '^[^\x00-\x20\x7F&|<>,=`"]{1,1024}$' }
+    }
+
+    foreach ($DBConnection in $ConnectionString.GetEnumerator())
+    {
+        $argumentValues['ConnectionString name'] = @{
+            Value = $DBConnection.Key
+            Pattern = '^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$'
+        }
+        $argumentValues['ConnectionString value'] = @{
+            Value = $DBConnection.Value
+            Pattern = '^[^\x00-\x1F\x7F&|<>`"]{1,4096}$'
+        }
+    }
+
+    foreach ($argumentValue in $argumentValues.GetEnumerator())
+    {
+        if ($argumentValue.Value.Value -notmatch $argumentValue.Value.Pattern)
+        {
+            throw "Publish-WebPackage: $($argumentValue.Key) contains unsupported characters."
+        }
+    }
 
     $msdeployPath = Get-MSDeployCmd
 
