@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http.Headers;
+using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
 using Azure.Core;
@@ -18,6 +20,8 @@ namespace Company.Function
 {
     public static class TestMIHttpTrigger
     {
+        private const string RequiredRole = "AzureDevOpsWorkItemReader";
+
         public const string AdoBaseUrl = "https://dev.azure.com";
 
         public const string AdoOrgName = "Your organization name";
@@ -52,9 +56,24 @@ namespace Company.Function
             [HttpTrigger(AuthorizationLevel.Function, "get", Route = null)] HttpRequest req,
             ILogger log)
         {
-            if (!int.TryParse(req.Query["workItemId"], out int workItemId))
+            if (req.HttpContext.User.Identity?.IsAuthenticated != true)
             {
-                return new BadRequestObjectResult($"Invalid Work item ID: {req.Query["workItemId"]}.");
+                log.LogWarning("Unauthenticated request rejected.");
+                return new UnauthorizedResult();
+            }
+
+            var hasRequiredRole = req.HttpContext.User.Claims.Any(
+                claim => (claim.Type == ClaimTypes.Role || claim.Type == "roles") &&
+                    claim.Value == RequiredRole);
+            if (!hasRequiredRole)
+            {
+                log.LogWarning("Authenticated request without required role rejected.");
+                return new ForbidResult();
+            }
+
+            if (!int.TryParse(req.Query["workItemId"], out int workItemId) || workItemId <= 0)
+            {
+                return new BadRequestObjectResult("A positive work item ID is required.");
             }
 
             try

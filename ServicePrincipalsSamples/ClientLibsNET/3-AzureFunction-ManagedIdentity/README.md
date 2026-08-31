@@ -52,9 +52,13 @@ In Visual Studio:
 1. Open the solution file `../ServicePrincipalsSamples.sln`.
 2. Configure the Azure account to be used in `Tools -> Options -> Azure Service Authentication -> Account Selection`.
 3. Build the project and run using the profile `AzureFunctionTest`.
-4. In the output you will get the function URL and a function key. Call the function with the work item ID and key, for example `?workItemId={work item id}&code={function key}`. You can alternatively send the key in the `x-functions-key` header.
+4. Configure App Service authentication for the Function App with Microsoft Entra ID, require authentication for all requests, and configure the unauthenticated action to return HTTP 401.
+5. Define the `AzureDevOpsWorkItemReader` app role on the Function App registration and assign it only to identities that need this sample's read operation.
+6. In the output you will get the function URL and a function key. Call the function with a positive work item ID, a function key, and a Microsoft Entra bearer token for an identity assigned the `AzureDevOpsWorkItemReader` role. You can provide the key as `?code={function key}` or in the `x-functions-key` header.
 
-The function uses `AuthorizationLevel.Function`; do not change it to `Anonymous`. A function key authenticates the caller to the sample endpoint. Grant the managed identity only the minimum Azure DevOps permissions required to read the intended work items.
+The function applies default-deny access control at two layers: `AuthorizationLevel.Function` requires a function key, while App Service authentication establishes the caller identity and the function requires the `AzureDevOpsWorkItemReader` app role. Do not change the trigger to `Anonymous`, permit unauthenticated App Service requests, or grant the reader role broadly.
+
+Grant the managed identity only the minimum Azure DevOps permissions required to read the intended work items. Enable App Service authentication logs and Application Insights, monitor rejected authentication and authorization attempts, and alert on unusual rejection rates. Validate deployment with an unauthenticated request (401), an authenticated caller without the app role (403), and an authorized caller (successful work-item retrieval).
 
 See [Azure Identity client library for .NET](https://learn.microsoft.com/en-us/dotnet/api/overview/azure/identity-readme?view=azure-dotnet#defaultazurecredential) for more details and options for providing local development credentials.
 
