@@ -1416,6 +1416,26 @@ function Get-MSDeployCmd
     return $msdeployPath
 }
 
+function ConvertTo-NativeCommandLineArgument
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [String]
+        $Argument
+    )
+
+    if ($Argument -notmatch '[\s"]')
+    {
+        return $Argument
+    }
+
+    $escapedArgument = [Regex]::Replace($Argument, '(\\*)"', '$1$1\"')
+    $escapedArgument = [Regex]::Replace($escapedArgument, '(\\+)$', '$1$1')
+    return '"' + $escapedArgument + '"'
+}
+
 
 <#
 .SYNOPSIS
@@ -1614,35 +1634,43 @@ function Publish-WebPackage
 
     Write-VerboseWithTime 'Publish-WebPackage: Start'
 
-    $msdeployCmd = Get-MSDeployCmd
+    $msdeployPath = Get-MSDeployCmd
 
-    if (!$msdeployCmd)
+    if (!$msdeployPath)
     {
         throw 'Publish-WebPackage: MsDeploy.exe cannot be found.'
     }
 
     $WebDeployPackage = (Get-Item $WebDeployPackage).FullName
 
-    $msdeployCmd =  '"' + $msdeployCmd + '"'
-    $msdeployCmd += ' -verb:sync'
-    $msdeployCmd += ' -Source:Package="{0}"'
-    $msdeployCmd += ' -dest:auto,computername="{1}?site={2}",userName={3},password={4},authType=Basic'
+    $msdeployArguments = @(
+        '-verb:sync'
+        ('-Source:Package={0}' -f $WebDeployPackage)
+        ('-dest:auto,computername={0}?site={1},userName={2},password={3},authType=Basic' -f $PublishUrl, $SiteName, $UserName, $Password)
+    )
     if ($AllowUntrusted)
     {
-        $msdeployCmd += ' -allowUntrusted'
+        $msdeployArguments += '-allowUntrusted'
     }
-    $msdeployCmd += ' -setParam:name="IIS Web Application Name",value="{2}"'
+    $msdeployArguments += ('-setParam:name=IIS Web Application Name,value={0}' -f $SiteName)
 
     foreach ($DBConnection in $ConnectionString.GetEnumerator())
     {
-        $msdeployCmd += (' -setParam:name="{0}",value="{1}"' -f $DBConnection.Key, $DBConnection.Value)
+        $msdeployArguments += ('-setParam:name={0},value={1}' -f $DBConnection.Key, $DBConnection.Value)
     }
 
-    $msdeployCmd = $msdeployCmd -f $WebDeployPackage, $PublishUrl, $SiteName, $UserName, $Password
+    Write-VerboseWithTime ('Publish-WebPackage: Starting MsDeploy.exe for site ' + $SiteName)
 
-    Write-VerboseWithTime ('Publish-WebPackage: MsDeploy: ' + $msdeployCmd)
+    $msdeployCommandLine = ($msdeployArguments | ForEach-Object {
+        ConvertTo-NativeCommandLineArgument $_
+    }) -join ' '
 
-    $msdeployExecution = Start-Process cmd.exe -ArgumentList ('/C "' + $msdeployCmd + '" ') -WindowStyle Normal -Wait -PassThru
+    $msdeployExecution = Start-Process `
+        -FilePath $msdeployPath `
+        -ArgumentList $msdeployCommandLine `
+        -WindowStyle Normal `
+        -Wait `
+        -PassThru
 
     if ($msdeployExecution.ExitCode -ne 0)
     {
