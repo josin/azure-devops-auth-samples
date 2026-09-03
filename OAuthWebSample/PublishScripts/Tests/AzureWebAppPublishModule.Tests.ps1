@@ -4,6 +4,7 @@ Import-Module $modulePath -Force
 Describe 'Publish-WebPackage process invocation' {
     InModuleScope AzureWebAppPublishModule {
         BeforeEach {
+            $script:capturedArgumentList = $null
             Mock Test-Path { $true }
             Mock Get-MSDeployCmd { 'C:\Program Files\IIS\Microsoft Web Deploy V3\MsDeploy.exe' }
             Mock Get-Item {
@@ -11,17 +12,9 @@ Describe 'Publish-WebPackage process invocation' {
             }
 
             Mock Start-Process {
+                $script:capturedArgumentList = $ArgumentList
                 [pscustomobject]@{ ExitCode = 0 }
             }
-        }
-
-        It 'requires a trusted Microsoft-signed msdeploy executable' {
-            $moduleSource = Get-Content (Join-Path $PSScriptRoot '..\AzureWebAppPublishModule.psm1') -Raw
-
-            $moduleSource | Should -Match 'Get-AuthenticodeSignature'
-            $moduleSource | Should -Match 'SignatureStatus\]::Valid'
-            $moduleSource | Should -Match 'O=Microsoft Corporation'
-            $moduleSource | Should -Match "GetFolderPath\('ProgramFiles'\)"
         }
 
         It 'launches msdeploy directly and preserves allowed punctuation as argument data' {
@@ -45,6 +38,35 @@ Describe 'Publish-WebPackage process invocation' {
                 $ArgumentList -match '-Source:Package=' -and
                 $ArgumentList -match '-dest:auto,computername='
             }
+            Assert-MockCalled Start-Process -Times 1 -Exactly
+        }
+
+        $passwordCases = @(
+            @{ Label = 'equals'; Value = 'secret=value==' }
+            @{ Label = 'space'; Value = 'secret value' }
+            @{ Label = 'semicolon'; Value = 'secret;value' }
+            @{ Label = 'ampersand'; Value = 'secret&value' }
+            @{ Label = 'pipe'; Value = 'secret|value' }
+            @{ Label = 'angle brackets'; Value = 'secret<value>' }
+            @{ Label = 'backtick'; Value = 'secret`value' }
+            @{ Label = 'ordinary punctuation'; Value = 'secret!#$%''()+-./:?@[]^_{}~' }
+        )
+
+        It 'preserves direct-process-safe password characters: <Label>' -TestCases $passwordCases {
+            param($Label, $Value)
+
+            $result = Publish-WebPackage `
+                -WebDeployPackage 'C:\packages\sample app.zip' `
+                -PublishUrl 'https://server.example:8172/msdeploy.axd' `
+                -SiteName 'sample-site' `
+                -UserName 'deploy-user' `
+                -Password $Value `
+                -ConnectionString @{ 'DefaultConnection' = 'Server=db,1433;Password=a=b;Value=space value' }
+
+            $result | Should -BeTrue
+            $script:capturedArgumentList | Should -Match ([regex]::Escape($Value))
+            $script:capturedArgumentList |
+                Should -Match ([regex]::Escape('Server=db,1433;Password=a=b;Value=space value'))
             Assert-MockCalled Start-Process -Times 1 -Exactly
         }
 
@@ -131,5 +153,142 @@ Describe 'Publish-WebPackage process invocation' {
 
             Assert-MockCalled Start-Process -Times 0 -Exactly
         }
+
+        It 'rejects PublishUrl msdeploy attribute injection' {
+            {
+                Publish-WebPackage `
+                    -WebDeployPackage 'C:\packages\sample app.zip' `
+                    -PublishUrl 'https://server.example:8172/msdeploy.axd,userName=attacker' `
+                    -SiteName 'sample-site' `
+                    -UserName 'sample-user' `
+                    -Password 'sample-password' `
+                    -ConnectionString @{}
+            } | Should -Throw
+
+            Assert-MockCalled Start-Process -Times 0 -Exactly
+        }
+
+        It 'rejects connection value msdeploy attribute injection' {
+            {
+                Publish-WebPackage `
+                    -WebDeployPackage 'C:\packages\sample app.zip' `
+                    -PublishUrl 'https://server.example:8172/msdeploy.axd' `
+                    -SiteName 'sample-site' `
+                    -UserName 'sample-user' `
+                    -Password 'sample-password' `
+                    -ConnectionString @{
+                        'DefaultConnection' = 'Server=db;Database=x,scope=DeploymentBinaryPath,match=.*'
+                    }
+            } | Should -Throw
+
+            Assert-MockCalled Start-Process -Times 0 -Exactly
+        }
+
+        $invalidPublishUrls = @(
+            @{ Label = 'user info'; Value = 'https://user@server.example:8172/msdeploy.axd' }
+            @{ Label = 'query'; Value = 'https://server.example:8172/msdeploy.axd?x=y' }
+            @{ Label = 'fragment'; Value = 'https://server.example:8172/msdeploy.axd#fragment' }
+            @{ Label = 'quote'; Value = 'https://server.example:8172/msdeploy".axd' }
+        )
+
+        It 'rejects PublishUrl with <Label>' -TestCases $invalidPublishUrls {
+            param($Label, $Value)
+
+            {
+                Publish-WebPackage `
+                    -WebDeployPackage 'C:\packages\sample app.zip' `
+                    -PublishUrl $Value `
+                    -SiteName 'sample-site' `
+                    -UserName 'sample-user' `
+                    -Password 'sample-password' `
+                    -ConnectionString @{}
+            } | Should -Throw
+
+            Assert-MockCalled Start-Process -Times 0 -Exactly
+        }
+    }
+}
+
+Describe 'MSDeploy executable trust behavior' {
+    InModuleScope AzureWebAppPublishModule {
+        BeforeEach {
+            Mock Get-AuthenticodeSignature {
+                [pscustomobject]@{
+                    Status = [System.Management.Automation.SignatureStatus]::Valid
+                    SignerCertificate = [pscustomobject]@{
+                        Subject = 'CN=Microsoft Code Signing PCA, O=Microsoft Corporation, C=US'
+                    }
+                }
+            }
+        }
+
+        It 'accepts an executable under an approved root with a valid exact Microsoft O component' {
+            Test-MSDeployExecutableTrust `
+                -ResolvedPath 'C:\Program Files\IIS\Microsoft Web Deploy V3\MsDeploy.exe' `
+                -ApprovedRoots @('C:\Program Files') | Should -BeTrue
+        }
+
+        It 'rejects an approved-root prefix collision' {
+            {
+                Test-MSDeployExecutableTrust `
+                    -ResolvedPath 'C:\Program FilesEvil\MsDeploy.exe' `
+                    -ApprovedRoots @('C:\Program Files')
+            } | Should -Throw
+        }
+
+        It 'rejects an invalid Authenticode signature' {
+            Mock Get-AuthenticodeSignature {
+                [pscustomobject]@{
+                    Status = [System.Management.Automation.SignatureStatus]::NotSigned
+                    SignerCertificate = $null
+                }
+            }
+
+            {
+                Test-MSDeployExecutableTrust `
+                    -ResolvedPath 'C:\Program Files\IIS\MsDeploy.exe' `
+                    -ApprovedRoots @('C:\Program Files')
+            } | Should -Throw
+        }
+
+        $invalidSignerCases = @(
+            @{ Label = 'non-Microsoft O component'; Subject = 'CN=Contoso, O=Contoso, C=US' }
+            @{ Label = 'Microsoft substring in O component'; Subject = 'CN=Signer, O=Microsoft Corporation Services, C=US' }
+            @{ Label = 'Microsoft lookalike O component'; Subject = 'CN=Signer, O=Not Microsoft Corporation, C=US' }
+            @{ Label = 'Microsoft text in OU component'; Subject = 'CN=Signer, OU=O=Microsoft Corporation, O=Contoso, C=US' }
+            @{ Label = 'Microsoft text in CN component'; Subject = 'CN="O=Microsoft Corporation", O=Contoso, C=US' }
+        )
+
+        It 'rejects signer subject with <Label>' -TestCases $invalidSignerCases {
+            param($Label, $Subject)
+
+            Mock Get-AuthenticodeSignature {
+                [pscustomobject]@{
+                    Status = [System.Management.Automation.SignatureStatus]::Valid
+                    SignerCertificate = [pscustomobject]@{ Subject = $Subject }
+                }
+            }
+
+            {
+                Test-MSDeployExecutableTrust `
+                    -ResolvedPath 'C:\Program Files\IIS\MsDeploy.exe' `
+                    -ApprovedRoots @('C:\Program Files')
+            } | Should -Throw
+        }
+
+        It 'returns null when registry discovery finds no msdeploy version' {
+            Mock Test-Path { $true }
+            Mock Get-ChildItem { @() }
+
+            Get-MSDeployCmd | Should -BeNullOrEmpty
+        }
+    }
+}
+
+Describe 'AzureWebAppPublishModule static-shape assertions' {
+    It 'uses direct process execution rather than cmd.exe' {
+        $moduleSource = Get-Content (Join-Path $PSScriptRoot '..\AzureWebAppPublishModule.psm1') -Raw
+
+        $moduleSource | Should -Not -Match 'Start-Process\s+cmd\.exe'
     }
 }
