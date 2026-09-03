@@ -1865,6 +1865,11 @@ function Publish-WebPackage
 
     $WebDeployPackage = (Get-Item $WebDeployPackage).FullName
 
+    if ($WebDeployPackage -match '[\x00-\x1F\x7F,"]')
+    {
+        throw 'Publish-WebPackage: WebDeployPackage path contains unsupported characters.'
+    }
+
     $msdeployArguments = @(
         '-verb:sync'
         ('-Source:Package={0}' -f $WebDeployPackage)

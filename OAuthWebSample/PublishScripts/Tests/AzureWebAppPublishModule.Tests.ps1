@@ -126,10 +126,20 @@ Describe 'Publish-WebPackage process invocation' {
             Assert-MockCalled Start-Process -Times 0 -Exactly
         }
 
-        It 'rejects msdeploy attribute injection in the resolved package path' {
+        $invalidPackagePaths = @(
+            @{ Label = 'comma-delimited attribute'; Value = 'C:\packages\sample.zip,foo=bar' }
+            @{ Label = 'double quote'; Value = 'C:\packages\sample".zip' }
+            @{ Label = 'control character'; Value = "C:\packages\sample`n.zip" }
+            @{ Label = 'delete character'; Value = 'C:\packages\sample' + [char]0x7F + '.zip' }
+        )
+
+        It 'rejects <Label> in the resolved package path' -TestCases $invalidPackagePaths {
+            param($Label, $Value)
+
+            $script:resolvedPackagePath = $Value
             Mock Get-Item {
                 [pscustomobject]@{
-                    FullName = 'C:\packages\sample.zip,foo=bar'
+                    FullName = $script:resolvedPackagePath
                 }
             }
 
