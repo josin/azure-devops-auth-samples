@@ -184,6 +184,23 @@ Describe 'Publish-WebPackage process invocation' {
             Assert-MockCalled Start-Process -Times 0 -Exactly
         }
 
+        It 'validates every connection value before invoking msdeploy' {
+            {
+                Publish-WebPackage `
+                    -WebDeployPackage 'C:\packages\sample app.zip' `
+                    -PublishUrl 'https://server.example:8172/msdeploy.axd' `
+                    -SiteName 'sample-site' `
+                    -UserName 'sample-user' `
+                    -Password 'sample-password' `
+                    -ConnectionString @{
+                        'Malicious' = 'Server=db;Database=x,scope=DeploymentBinaryPath'
+                        'Benign' = 'Server=db;Database=x'
+                    }
+            } | Should -Throw
+
+            Assert-MockCalled Start-Process -Times 0 -Exactly
+        }
+
         $invalidPublishUrls = @(
             @{ Label = 'user info'; Value = 'https://user@server.example:8172/msdeploy.axd' }
             @{ Label = 'query'; Value = 'https://server.example:8172/msdeploy.axd?x=y' }
@@ -257,6 +274,7 @@ Describe 'MSDeploy executable trust behavior' {
             @{ Label = 'Microsoft lookalike O component'; Subject = 'CN=Signer, O=Not Microsoft Corporation, C=US' }
             @{ Label = 'Microsoft text in OU component'; Subject = 'CN=Signer, OU=O=Microsoft Corporation, O=Contoso, C=US' }
             @{ Label = 'Microsoft text in CN component'; Subject = 'CN="O=Microsoft Corporation", O=Contoso, C=US' }
+            @{ Label = 'Microsoft text after an escaped CN comma'; Subject = 'CN=Release\, O=Microsoft Corporation, O=Contoso, C=US' }
         )
 
         It 'rejects signer subject with <Label>' -TestCases $invalidSignerCases {
