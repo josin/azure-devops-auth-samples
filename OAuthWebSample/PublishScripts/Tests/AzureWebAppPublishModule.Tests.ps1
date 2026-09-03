@@ -126,6 +126,26 @@ Describe 'Publish-WebPackage process invocation' {
             Assert-MockCalled Start-Process -Times 0 -Exactly
         }
 
+        It 'rejects msdeploy attribute injection in the resolved package path' {
+            Mock Get-Item {
+                [pscustomobject]@{
+                    FullName = 'C:\packages\sample.zip,foo=bar'
+                }
+            }
+
+            {
+                Publish-WebPackage `
+                    -WebDeployPackage 'C:\packages\sample.zip' `
+                    -PublishUrl 'https://server.example:8172/msdeploy.axd' `
+                    -SiteName 'sample-site' `
+                    -UserName 'sample-user' `
+                    -Password 'sample-password' `
+                    -ConnectionString @{}
+            } | Should -Throw
+
+            Assert-MockCalled Start-Process -Times 0 -Exactly
+        }
+
         It 'rejects invalid connection string parameter names' {
             {
                 Publish-WebPackage `
