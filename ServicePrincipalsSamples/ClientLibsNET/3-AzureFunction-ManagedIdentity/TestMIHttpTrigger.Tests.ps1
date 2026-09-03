@@ -173,7 +173,7 @@ Describe 'TestMIHttpTrigger source contracts (static)' {
     }
 
     It 'correlates downstream failures without returning exception details' {
-        $source | Should -Match 'LogError\(ex,\s*"Failed to retrieve work item \{WorkItemId\}\. TraceId=\{TraceId\}"'
+        $source | Should -Match 'LogError\(\s*ex,\s*"Failed to retrieve work item \{WorkItemId\}\. TraceId=\{TraceId\}"'
         $source | Should -Match 'requestId\s*=\s*req\.HttpContext\.TraceIdentifier'
         $source | Should -Not -Match 'ObjectResult\(ex\.Message\)'
     }

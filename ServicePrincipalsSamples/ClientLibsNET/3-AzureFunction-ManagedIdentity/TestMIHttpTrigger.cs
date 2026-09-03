@@ -58,17 +58,22 @@ namespace Company.Function
         {
             if (req.HttpContext.User.Identity?.IsAuthenticated != true)
             {
-                log.LogWarning("Unauthenticated request rejected.");
-                return new UnauthorizedResult();
+                log.LogWarning(
+                    "Unauthenticated request rejected. TraceId={TraceId}",
+                    req.HttpContext.TraceIdentifier);
+                return new StatusCodeResult(StatusCodes.Status401Unauthorized);
             }
 
+            // EasyAuth surfaces Entra app roles as "roles"; ASP.NET inbound claim mapping can rewrite them to ClaimTypes.Role. Check both.
             var hasRequiredRole = req.HttpContext.User.Claims.Any(
                 claim => (claim.Type == ClaimTypes.Role || claim.Type == "roles") &&
                     claim.Value == RequiredRole);
             if (!hasRequiredRole)
             {
-                log.LogWarning("Authenticated request without required role rejected.");
-                return new ForbidResult();
+                log.LogWarning(
+                    "Authenticated request without required role rejected. TraceId={TraceId}",
+                    req.HttpContext.TraceIdentifier);
+                return new StatusCodeResult(StatusCodes.Status403Forbidden);
             }
 
             if (!int.TryParse(req.Query["workItemId"], out int workItemId) || workItemId <= 0)
@@ -88,8 +93,15 @@ namespace Company.Function
             }
             catch (Exception ex)
             {
-                log.LogError(ex, "Failed to retrieve work item {WorkItemId}.", workItemId);
-                return new StatusCodeResult(StatusCodes.Status500InternalServerError);
+                log.LogError(
+                    ex,
+                    "Failed to retrieve work item {WorkItemId}. TraceId={TraceId}",
+                    workItemId,
+                    req.HttpContext.TraceIdentifier);
+                return new ObjectResult(new { requestId = req.HttpContext.TraceIdentifier })
+                {
+                    StatusCode = StatusCodes.Status500InternalServerError
+                };
             }
         }
 
